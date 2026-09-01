@@ -20,11 +20,18 @@ from apodex.prompts_base import (
     coding_agent_prompt,
     research_agent_prompt,
 )
+from workflows._shared.writing_style import WRITING_STYLE_NOTE
+
+# Writing-style rules for every prose deliverable (human-writing /
+# tech-doc-style-chinese / weng-post), appended as a section to both TUI modes
+# exactly as the workflows append it to their main prompts.
+_WRITING_STYLE_SECTION = {"Writing Style": WRITING_STYLE_NOTE}
 
 
 def build_system_prompt(cwd: str) -> str:
     """Coding-mode prompt (react_research coding agent) anchored to ``cwd``."""
     return coding_agent_prompt(extra_sections={
+        **_WRITING_STYLE_SECTION,
         "Language": (
             "Respond in the SAME language as the user's most recent message — if "
             "they write in Chinese, answer in Chinese; if in English, answer in "
@@ -100,6 +107,7 @@ def build_system_prompt(cwd: str) -> str:
 def build_research_prompt(cwd: str) -> str:
     """Research-mode prompt (react_research research agent) for this terminal."""
     return research_agent_prompt(extra_sections={
+        **_WRITING_STYLE_SECTION,
         "Language": (
             "Respond in the SAME language as the user's most recent message "
             "(e.g. Chinese in → Chinese out). Keep citations, URLs, code, and "

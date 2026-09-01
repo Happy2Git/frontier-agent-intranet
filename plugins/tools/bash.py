@@ -221,7 +221,9 @@ async def bash(command: str, description: str = "") -> str:
         return f"Error: {e}"
 
     # Arm the socket-level download cap for any python the command spawns
-    # (``python3 -c``, pip, scripts) — env exports propagate to children.
+    # (``python3 -c``, scripts) — env exports propagate to children. The
+    # sandbox remains network-isolated; this cap is defense in depth for a
+    # deployment that supplies a different backend.
     # ``export`` (not the ``VAR=x cmd`` prefix form) so compound commands
     # (``cd x && python3 ...``) are covered too. See _net_guard.py.
     await ensure_guard_file(sandbox)
@@ -240,11 +242,10 @@ async def bash(command: str, description: str = "") -> str:
             sandbox,
             exec_command,
             timeout=timeout_s,
-            # Current task workspaces intentionally support network-backed
-            # research and document retrieval. Resource-safe document
-            # downloads should use download_file; bash networking remains
-            # available for APIs and existing skills.
-            allow_net=True,
+            # Model-authored shell commands never receive a network namespace.
+            # The only permitted network operation is the dedicated internal
+            # search tool, which calls its configured endpoint in the harness.
+            allow_net=False,
         )
 
         output = ""

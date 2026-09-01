@@ -205,6 +205,29 @@ class FrontierAgentConfig(BaseSettings):
     serper_base_url: str = "https://google.serper.dev"
     jina_api_key: str = ""
     jina_base_url: str = "https://r.jina.ai"
+
+    # DeepSeek-native web search (Anthropic-compatible Messages API with the
+    # web_search_20250305 server tool). Activates as a fallback when no
+    # Serper key is set, mirroring how the DSH harness resolves web search.
+    deepseek_search_enabled: bool = True
+    deepseek_search_base_url: str = "https://api.deepseek.com/anthropic/v1"
+    deepseek_search_model: str = "deepseek-v4-flash"
+    deepseek_search_max_uses: int = 5
+    deepseek_search_max_tokens: int = 4096
+    deepseek_search_api_version: str = "2023-06-01"
+
+    # Generic Anthropic-compatible search channel (any endpoint speaking the
+    # Anthropic Messages API with the web_search_20250305 server tool). When
+    # anthropic_search_enabled and an api key are set, this channel wins over
+    # deepseek_search_*. Used to point search at a different provider (e.g. the
+    # claude-yibu gateway) while keeping the same wire format.
+    anthropic_search_enabled: bool = False
+    anthropic_search_base_url: str = "https://api.deepseek.com/anthropic/v1"
+    anthropic_search_api_key: str = ""
+    anthropic_search_model: str = "claude-opus-4-8"
+    anthropic_search_max_uses: int = 5
+    anthropic_search_max_tokens: int = 8192
+    anthropic_search_api_version: str = "2023-06-01"
     # Suffix-matched domains blocked from both search and fetch.
     web_domain_blacklist_extra: str = ""
     # Domain-scoped, case-insensitive phrase filtering for search snippets.

@@ -12,6 +12,10 @@ import httpx
 
 from frontier_agent.core.tool import tool
 from frontier_agent.infra.config import get_config
+from frontier_agent.infra.network_policy import (
+    NetworkPolicyError,
+    validate_outbound_url,
+)
 from frontier_agent.infra.usage_meter import record_api_request
 from plugins.tools._coerce import coerce_json_list
 from plugins.tools._single_flight import SingleFlightCoalescer
@@ -299,9 +303,16 @@ async def _do_web_search(
     config = get_config()
 
     if not config.serper_api_key:
-        return {}
+        # No Serper creds - fall back to DeepSeek-native search.
+        return await _deepseek_search(query, num_results)
 
     url = f"{config.serper_base_url}/search"
+    try:
+        validate_outbound_url(url, purpose="search")
+    except NetworkPolicyError as exc:
+        logger.warning("Serper endpoint blocked by network policy: %s", exc)
+        record_api_request("serper", requests=0, errors=1)
+        return {}
     headers = {"X-API-KEY": config.serper_api_key, "Content-Type": "application/json"}
 
     payload: dict = {
@@ -358,6 +369,168 @@ async def _do_web_search(
     logger.error("Serper search exhausted retries for '%s'", query[:50])
     return {}
 
+
+async def _deepseek_search(query: str, num_results: int) -> dict:
+    """Anthropic-compatible native web search.
+
+    Issues one Messages request carrying the web_search_20250305 server tool;
+    the provider runs the search server-side and returns structured
+    web_search_tool_result blocks. Mapped into the Serper-shaped organic dict
+    that _format_results already consumes.
+
+    Two channels, in precedence order:
+      1. anthropic_search_* (generic; e.g. the claude-yibu gateway)
+      2. deepseek_search_*  (DeepSeek's own Anthropic-compatible base)
+
+    Snippets come from citations[] on text blocks (url -> cited_text), which is
+    where this wire format carries excerpts; web_search_result items themselves
+    only carry title/url/page_age plus an opaque encrypted_content blob that is
+    never surfaced. Returns {} on any failure so callers degrade to no-results.
+    """
+    config = get_config()
+
+    if config.anthropic_search_enabled and config.anthropic_search_api_key:
+        base = config.anthropic_search_base_url.rstrip("/")
+        api_key = config.anthropic_search_api_key
+        model = config.anthropic_search_model
+        max_uses = config.anthropic_search_max_uses
+        max_tokens = config.anthropic_search_max_tokens
+        api_version = config.anthropic_search_api_version
+        label = "anthropic_search"
+    elif config.deepseek_search_enabled and config.deepseek_api_key:
+        base = config.deepseek_search_base_url.rstrip("/")
+        api_key = config.deepseek_api_key
+        model = config.deepseek_search_model
+        max_uses = config.deepseek_search_max_uses
+        max_tokens = config.deepseek_search_max_tokens
+        api_version = config.deepseek_search_api_version
+        label = "deepseek_search"
+    else:
+        return {}
+
+    url = base + "/messages"
+    try:
+        validate_outbound_url(url, purpose="search")
+    except NetworkPolicyError as exc:
+        logger.warning("%s endpoint blocked by network policy: %s", label, exc)
+        record_api_request(label, requests=0, errors=1)
+        return {}
+    body = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": "Perform a web search for the query: " + query}],
+        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": max_uses}],
+    }
+    headers = {
+        "x-api-key": api_key,
+        "authorization": "Bearer " + api_key,
+        "anthropic-version": api_version,
+        "content-type": "application/json",
+    }
+    for _ in range(_MAX_RETRIES):
+        try:
+            async with httpx.AsyncClient(timeout=180) as client:
+                resp = await client.post(url, headers=headers, json=body)
+                if resp.status_code >= 500:
+                    logger.warning("%s %d for %s; retrying", label, resp.status_code, query[:50])
+                    await asyncio.sleep(1)
+                    continue
+                resp.raise_for_status()
+                record_api_request(label)
+                return _map_deepseek_results(resp.json(), num_results)
+        except (
+            httpx.TimeoutException,
+            httpx.HTTPStatusError,
+            httpx.ConnectError,
+            httpx.NetworkError,
+            ValueError,
+            TypeError,
+            KeyError,
+        ) as e:
+            logger.warning("%s failed for %s: %s", label, query[:50], e)
+            record_api_request(label, requests=0, errors=1)
+            return {}
+        except Exception as e:
+            # Provider-specific JSON/shape failures must degrade to an empty
+            # result as well. A malformed search response cannot take down a
+            # single-query agent turn.
+            logger.warning("%s returned an unusable response for %s: %s", label, query[:50], e)
+            record_api_request(label, requests=0, errors=1)
+            return {}
+    return {}
+
+
+def _citation_snippets(data: dict) -> dict:
+    """Collect url -> joined cited_text excerpts from every text block.
+
+    This wire format carries search excerpts as citations on the assistant's
+    text blocks, keyed by url, rather than on the web_search_result items.
+    """
+    if not isinstance(data, dict):
+        return {}
+    snippets: dict = {}
+    content = data.get("content", [])
+    if not isinstance(content, list):
+        return {}
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") != "text":
+            continue
+        citations = block.get("citations") or []
+        if not isinstance(citations, list):
+            continue
+        for cit in citations:
+            if not isinstance(cit, dict):
+                continue
+            url = cit.get("url", "")
+            text = (cit.get("cited_text") or "").strip()
+            if not url or not text:
+                continue
+            existing = snippets.get(url)
+            if existing:
+                if text not in existing:
+                    snippets[url] = existing + " " + text
+            else:
+                snippets[url] = text
+    return snippets
+
+
+def _map_deepseek_results(data, num_results):
+    if not isinstance(data, dict):
+        raise ValueError("search response must be a JSON object")
+    content = data.get("content", [])
+    if not isinstance(content, list):
+        raise ValueError("search response content must be a list")
+    organic = []
+    seen = set()
+    snippets = _citation_snippets(data)
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") != "web_search_tool_result":
+            continue
+        items = block.get("content", [])
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") != "web_search_result":
+                continue
+            url = item.get("url", "")
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            organic.append({
+                "title": item.get("title", ""),
+                "link": url,
+                "snippet": (snippets.get(url) or "")[:600],
+                "date": item.get("page_age", ""),
+            })
+            if len(organic) >= num_results:
+                return {"organic": organic}
+    return {"organic": organic}
 
 def _format_results(data: dict, max_organic: int | None = None) -> str:
     """Format Serper response into readable text with all result types.

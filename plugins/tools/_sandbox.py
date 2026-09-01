@@ -44,6 +44,17 @@ from plugins.tools._path_auth import _path_within
 
 logger = logging.getLogger(__name__)
 
+
+def _intranet_only_enabled() -> bool:
+    """Read the network policy lazily to avoid the config import cycle."""
+    try:
+        from frontier_agent.infra.network_policy import intranet_only
+        return intranet_only()
+    except Exception:
+        # A policy import failure must not turn a secure deployment into an
+        # unrestricted one.
+        return True
+
 _sandbox = None  # E2B Sandbox | BwrapSandbox | task override | None
 # Serializes shared-singleton creation. Without it, a burst of concurrent
 # sub-agents all see ``_sandbox is None``, each call ``Sandbox.create()``, and
@@ -2023,6 +2034,12 @@ class CurrentSandbox:
             self.commands = self._inner.commands
             self.files = self._inner.files
         else:
+            if _intranet_only_enabled():
+                raise SandboxConfigurationError(
+                    "CurrentSandbox has no network namespace; intranet-only "
+                    "mode requires FRONTIER_AGENT_CONTAINER_INNER_BWRAP=1 "
+                    "with a usable bwrap backend"
+                )
             identity = tool_identity()
             if identity is None:
                 logger.warning(
@@ -2758,6 +2775,11 @@ def _resolve_use_e2b() -> tuple[bool, str, str, int]:
     path and the pool agree on when E2B is in play."""
     backend = _get_sandbox_backend()
     api_key, template, timeout = _get_e2b_config()
+    if _intranet_only_enabled() and backend == "e2b":
+        raise SandboxConfigurationError(
+            "sandbox_backend=e2b is disabled in intranet-only mode; use "
+            "SANDBOX_BACKEND=bwrap or a container with inner bwrap"
+        )
     if backend in ("local", "bwrap", "container", "native"):
         # The outer one-task worker container is the selected sandbox. An E2B
         # credential may still be present for unrelated services, but it must
@@ -2787,7 +2809,11 @@ def _resolve_use_e2b() -> tuple[bool, str, str, int]:
         # per-question timeout. The CLI had already worked around it by deleting
         # E2B_API_KEY from its own environment; fixing it here means every
         # caller gets the same guarantee instead of each remembering to.
-        use_e2b = bool(api_key) and _sandbox_profile() == _PROFILE_SERVICE
+        use_e2b = (
+            not _intranet_only_enabled()
+            and bool(api_key)
+            and _sandbox_profile() == _PROFILE_SERVICE
+        )
         if api_key and not use_e2b:
             logger.info(
                 "E2B key present but ignored: SANDBOX_PROFILE=%s keeps execution "

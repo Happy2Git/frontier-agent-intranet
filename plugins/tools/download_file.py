@@ -8,6 +8,11 @@ import os
 from pathlib import Path
 
 from frontier_agent.core.tool import tool
+from frontier_agent.infra.network_policy import (
+    NetworkPolicyError,
+    intranet_only,
+    validate_outbound_url,
+)
 from plugins.tools._sandbox import (
     aget_sandbox,
     arun_sandbox_cmd,
@@ -65,14 +70,15 @@ async def download_file(url: str, path: str = "") -> str:
     """Download a bounded document or small archive into the task workspace.
 
     Use this for PDFs, Word/Excel/PowerPoint files, text/data documents,
-    images, and small ZIP/TAR/GZIP archives. The tool validates and pins every
-    redirect hop, rejects private/internal destinations, preflights declared
-    size when available, enforces the actual streamed byte count against
-    per-file and per-task budgets, and atomically publishes the completed
-    file. It does not extract archives.
+    images, and small ZIP/TAR/GZIP archives in an explicitly public-network
+    deployment. In the default intranet-only mode this capability is disabled;
+    the internal search endpoint is the only network-backed tool. Public mode
+    still validates and pins every redirect hop, preflights declared size when
+    available, enforces streamed byte budgets, and atomically publishes the
+    completed file. It does not extract archives.
 
     Args:
-        url: Public HTTP(S) URL of the file to download.
+        url: HTTP(S) URL of the file to download. Disabled in intranet-only mode.
         path: Optional destination filename. Directory components are ignored;
             downloads always land in the workspace ``downloads`` directory.
 
@@ -82,6 +88,19 @@ async def download_file(url: str, path: str = "") -> str:
     """
     if not url or not url.strip():
         return json.dumps({"status": "error", "error": "url is required"})
+
+    if intranet_only():
+        return json.dumps({
+            "status": "blocked",
+            "error": (
+                "download_file is disabled in intranet-only mode; use the "
+                "configured internal search endpoint or stage the file locally"
+            ),
+        })
+    try:
+        validate_outbound_url(url.strip(), purpose="download")
+    except NetworkPolicyError as exc:
+        return json.dumps({"status": "blocked", "error": str(exc)})
 
     file_limit = _positive_env_bytes(
         "DOWNLOAD_FILE_MAX_BYTES", _DEFAULT_FILE_LIMIT,

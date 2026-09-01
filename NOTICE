@@ -1,0 +1,35 @@
+FrontierAgent — Intranet-Adapted Copy
+=====================================
+
+This repository is a modified copy of the upstream open-source project:
+
+    FrontierAgent
+    Copyright (c) Apodex AI
+    Source: https://github.com/ApodexAI/FrontierAgent
+    License: Apache License, Version 2.0 (see LICENSE)
+    Upstream HEAD at fork time: 3364b7a
+
+It is NOT affiliated with, endorsed by, or maintained by Apodex AI.
+The Apache-2.0 license terms apply to this modified copy as well.
+
+Modifications made on top of upstream (branch `feat/intranet`) include:
+
+- Intranet network policy (`frontier_agent/infra/network_policy.py`):
+  fail-closed by default (`FRONTIER_AGENT_INTRANET_ONLY=1`); outbound
+  destinations must resolve to private networks; operator extension via
+  `FRONTIER_AGENT_ALLOWED_NETWORK_HOSTS` / `FRONTIER_AGENT_ALLOWED_NETWORK_CIDRS`.
+- Search channels for intranet use: DeepSeek-native and generic
+  Anthropic-compatible search fallbacks in `plugins/tools/web_search.py`;
+  aligned search/fetch implementations default to empty endpoints instead of
+  public Serper/Jina.
+- Data-exfiltration paths closed in intranet mode: `web_fetch`,
+  `download_file`, E2B sandbox, remote OCR/Vision (opt-in), and model-authored
+  shell network (sandbox `allow_net=False` / isolated-backend requirement).
+- Writing-style rules for prose deliverables (distilled from the
+  human-writing, tech-doc-style-chinese and weng-post writing skills) injected
+  into the agent_team and stateful_react_agent workflow prompts and the TUI
+  coding/research prompts, sourced from `workflows/_shared/writing_style.py`.
+- Documentation additions: `docs/install/intranet-deployment.zh-CN.md`.
+
+Upstream branding, documentation, and third-party notices in the source tree
+are retained unchanged for provenance.

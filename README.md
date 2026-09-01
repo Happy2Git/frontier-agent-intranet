@@ -6,6 +6,22 @@
 <hr>
 <br>
 
+> **这是一个内网适配的个人维护副本（intranet-adapted fork）。**
+>
+> 本仓库 fork 自公开发布的 [ApodexAI/FrontierAgent](https://github.com/ApodexAI/FrontierAgent)
+> （Apache-2.0，HEAD `3364b7a`），在其之上做了内网运行适配：网络策略默认
+> fail-closed（`FRONTIER_AGENT_INTRANET_ONLY=1`，仅允许私有网段出站），
+> 搜索接入内网端点，关闭 web_fetch / download_file / E2B 等外传路径，
+> 并在所有散文交付出口注入中文写作（human-writing）、中文技术文档
+> （tech-doc-style-chinese）、英文技术博客（weng-post）三套写作规则。
+> 部署与验证方法见 [docs/install/intranet-deployment.zh-CN.md](docs/install/intranet-deployment.zh-CN.md)。
+>
+> This is a locally maintained intranet-adapted copy of the upstream
+> [ApodexAI/FrontierAgent](https://github.com/ApodexAI/FrontierAgent)
+> repository (Apache-2.0). It is not affiliated with Apodex AI; upstream
+> branding and documentation below are retained for provenance. See
+> [NOTICE](NOTICE) for attribution and modification notes.
+
 <div align="center">
   <a href="https://www.apodex.ai"><img alt="Online Service" src="https://img.shields.io/badge/🤖%20Online_Service-Apodex_1.1-1783ff"/></a>
   <a href="https://www.apodex.com/"><img alt="Homepage" src="https://img.shields.io/badge/Homepage-Apodex_AI-white"/></a>

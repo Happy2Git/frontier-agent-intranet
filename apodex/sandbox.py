@@ -51,6 +51,15 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
+def _intranet_only_enabled() -> bool:
+    """Read the shared network policy without importing config at module load."""
+    try:
+        from frontier_agent.infra.network_policy import intranet_only
+        return intranet_only()
+    except Exception:
+        return True
+
 BWRAP = "bwrap"
 HOST = "host"
 CONTAINER = "container"
@@ -234,15 +243,28 @@ async def run_shell(
     command: str, cwd: str, timeout: int, strategy: Strategy,
 ) -> tuple[int, str, str]:
     """Run *command*, returning ``(exit_code, stdout, stderr)``."""
+    if _intranet_only_enabled():
+        # Native/host subprocesses have no network namespace. Refuse them at
+        # the last boundary before a model-authored command can run; callers
+        # must select bubblewrap (or a container with inner bwrap).
+        from frontier_agent.infra.network_policy import require_isolated_sandbox
+        inner_bwrap = False
+        if strategy.name == CONTAINER:
+            try:
+                from plugins.tools._sandbox import container_uses_inner_bwrap
+                inner_bwrap = container_uses_inner_bwrap()
+            except Exception:
+                inner_bwrap = False
+        try:
+            require_isolated_sandbox(strategy.name, inner_bwrap=inner_bwrap)
+        except ValueError as exc:
+            raise SandboxUnavailable(str(exc)) from exc
     if strategy.name == BWRAP:
         sandbox = _get_bwrap_sandbox(cwd)
         real = str(Path(cwd).expanduser().resolve())
         wrapped = f"cd {shlex.quote(real)} && {command}"
-        # ``allow_net=True``: the agent legitimately installs packages, runs
-        # tests that hit localhost, and uses git over the network. The jail is
-        # a filesystem boundary here, not a network one.
         result = await asyncio.to_thread(
-            sandbox.commands.run, wrapped, timeout=timeout, allow_net=True,
+            sandbox.commands.run, wrapped, timeout=timeout, allow_net=False,
         )
         return (
             int(getattr(result, "exit_code", 0) or 0),

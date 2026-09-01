@@ -20,6 +20,11 @@ from frontier_agent.infra.summary_llm import (
     FALLBACK_TRUNCATE,
     summary_llm_candidates,
 )
+from frontier_agent.infra.network_policy import (
+    NetworkPolicyError,
+    intranet_only,
+    validate_outbound_url,
+)
 from frontier_agent.infra.usage_meter import record_api_request, record_llm_usage
 from plugins.tools._bounded_fetch import (
     MAX_REDIRECT_HOPS,
@@ -52,9 +57,9 @@ def _jina_api_key() -> str:
 
 
 def _jina_base_url() -> str:
-    # Reference default: ``https://r.jina.ai`` (direct). The .env can
-    # override to a proxy without changing this fallback.
-    return os.getenv("JINA_BASE_URL", "https://r.jina.ai")
+    # Empty by default. A public Jina reader would be an accidental egress
+    # path when a key is present; deployments must name an internal reader.
+    return os.getenv("JINA_BASE_URL", "")
 
 
 def _summary_llm_base_url() -> str | None:
@@ -133,6 +138,11 @@ async def _scrape_url_with_jina(
     api_key = _jina_api_key()
     if not api_key:
         return {"success": False, "content": "", "error": "JINA_API_KEY not set"}
+
+    try:
+        validate_outbound_url(_jina_base_url(), purpose="reader")
+    except NetworkPolicyError as exc:
+        return {"success": False, "content": "", "error": str(exc)}
 
     # Avoid duplicate Jina URL prefix — if the user already passed a
     # ``https://r.jina.ai/<inner>`` URL, strip the outer prefix so we
@@ -430,6 +440,10 @@ async def _extract_with_candidate(
     """One candidate's extraction attempt (reference retry policy)."""
     endpoint = cand["endpoint"]
     model = cand["model"]
+    try:
+        validate_outbound_url(endpoint, purpose="summary_llm")
+    except NetworkPolicyError as exc:
+        return {"success": False, "extracted_info": "", "error": str(exc)}
     prompt = _EXTRACT_INFO_PROMPT.format(info_to_extract, text)
 
     payload: dict[str, Any] = {
@@ -564,6 +578,12 @@ async def _fetch_single(
     # This implementation is the one the shipped react profile selects
     # (``web_fetch_impl: aligned``), so the guard has to live here too and not
     # only in ``plugins/tools/web_fetch.py``.
+    if intranet_only():
+        return (
+            "Blocked: web_fetch is disabled in intranet-only mode. The "
+            "configured internal search endpoint is the only network-backed "
+            "retrieval path."
+        )
     non_public = await non_public_url_error(url)
     if non_public:
         return (

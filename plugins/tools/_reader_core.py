@@ -1,11 +1,14 @@
 
 """read_file parsers · core fragment (concatenated first)."""
 import hashlib
+import ipaddress as _ipaddress
 import json
 import os as _os
 import re as _re
+import socket as _socket
 import subprocess
 import sys
+from urllib.parse import urlsplit as _urlsplit
 
 _CACHE_DIR = "/workspace/.readdoc_cache"  # bind-mounted, persists across commands; missing/unwritable → silently re-render
 
@@ -30,10 +33,60 @@ def _ensure(mod: str, pkg: str) -> None:
     try:
         __import__(mod)
     except ImportError:
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-q", pkg],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        # Runtime package installation is an unbounded external data path and
+        # makes a supposedly offline reader depend on PyPI. Images must carry
+        # the parser dependencies at build time.
+        raise ImportError(
+            f"reader dependency {pkg!r} is unavailable; install it in the "
+            "runtime image before starting FrontierAgent"
         )
+
+
+def _reader_endpoint_allowed(url: str) -> bool:
+    """Allow only private reader endpoints when intranet mode is enabled."""
+    if not url:
+        return False
+    parsed = _urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    if parsed.username or parsed.password or parsed.fragment:
+        return False
+    if _os.environ.get("FRONTIER_AGENT_INTRANET_ONLY", "1").strip().lower() \
+            in {"0", "false", "no", "off", "disabled", "public"}:
+        return True
+    defaults = (
+        "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+        "127.0.0.0/8", "169.254.0.0/16", "::1/128", "fc00::/7", "fe80::/10",
+    )
+    networks = []
+    for raw in (*defaults, *_os.environ.get(
+        "FRONTIER_AGENT_ALLOWED_NETWORK_CIDRS", ""
+    ).split(",")):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            networks.append(_ipaddress.ip_network(raw, strict=False))
+        except ValueError:
+            return False
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        rows = _socket.getaddrinfo(parsed.hostname, port, type=_socket.SOCK_STREAM)
+    except (OSError, ValueError):
+        return False
+    addresses = {str(row[4][0]) for row in rows}
+    if not addresses:
+        return False
+    for raw in addresses:
+        try:
+            ip = _ipaddress.ip_address(raw)
+            if isinstance(ip, _ipaddress.IPv6Address) and ip.ipv4_mapped:
+                ip = ip.ipv4_mapped
+        except ValueError:
+            return False
+        if not any(ip in network for network in networks):
+            return False
+    return True
 
 
 # Vision reading (charts / figures / text inside an image): the reader calls the gateway
@@ -69,7 +122,10 @@ def _vision_read(img_bytes: bytes, mime: str = "image/png", question: str | None
     timeout: lower for batch reads (45s) so the whole batch converges inside the outer
     sandbox timeout."""
     base = _os.environ.get("READDOC_VISION_URL", "").rstrip("/")
-    if not base:
+    if not base or not _reader_endpoint_allowed(base):
+        if base:
+            _trace({"stage": "vision", "model": _os.environ.get("READDOC_VISION_MODEL", ""),
+                    "ok": False, "error": "vision endpoint rejected by network policy"})
         return None
     import base64 as _b64
     import json as _json

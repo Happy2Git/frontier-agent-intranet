@@ -23,6 +23,7 @@ from tenacity import (
 )
 
 from frontier_agent.core.tool import tool
+from frontier_agent.infra.network_policy import NetworkPolicyError, validate_outbound_url
 from frontier_agent.infra.usage_meter import record_api_request
 from plugins.tools.web_search import is_snippet_blocked_result
 
@@ -40,7 +41,10 @@ logger = logging.getLogger(__name__)
 # by Python's plugin discovery. At call time we are guaranteed to be
 # downstream of that load_dotenv, so ``os.environ`` is populated.
 def _serper_base_url() -> str:
-    return os.getenv("SERPER_BASE_URL", "https://google.serper.dev")
+    # An empty default forces deployments to name their internal search
+    # service. The old public Serper default would silently create an egress
+    # path when a key happened to be present.
+    return os.getenv("SERPER_BASE_URL", "")
 
 
 def _serper_api_key() -> str:
@@ -168,6 +172,13 @@ async def _serper_request(
     Serper doesn't bill a query it never answered.
     """
     base_url = _serper_base_url()
+    try:
+        validate_outbound_url(f"{base_url.rstrip('/')}/search", purpose="search")
+    except NetworkPolicyError:
+        # Preserve the aligned implementation's caller-facing error path while
+        # guaranteeing that no request is attempted for an invalid endpoint.
+        record_api_request("serper", requests=0, errors=1)
+        raise
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(

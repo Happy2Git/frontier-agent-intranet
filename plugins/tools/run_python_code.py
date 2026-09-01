@@ -406,14 +406,10 @@ async def run_python_code(code: str, timeout: int = 0) -> str:
             record_api_request("e2b")
         result = await arun_sandbox_cmd(
             sandbox, exec_cmd, timeout=cmd_timeout,
-            # Match ``bash``: both run model-authored code, so denying the
-            # network here while allowing it there only means the same snippet
-            # succeeds under ``bash -c 'python3 …'`` and fails via this tool —
-            # an asymmetry with no security value and a hard-to-place error.
-            # The bound is the socket cap injected above, not the namespace;
-            # on E2B/CurrentSandbox this path already had network anyway, so
-            # only the bwrap backend changes.
-            allow_net=True,
+            # Match ``bash``: model-authored Python runs without a network
+            # namespace. The dedicated search tool owns the only outbound
+            # application path and is checked against the intranet policy.
+            allow_net=False,
         )
     except TimeoutError:
         return f"Error: execution timed out after {timeout}s."

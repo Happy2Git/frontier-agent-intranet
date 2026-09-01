@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from workflows._shared.writing_style import WRITING_STYLE_NOTE
+
 # =====================================================================
 # Search query language rule
 # =====================================================================
@@ -1033,6 +1035,7 @@ def get_main_system_prompt(
     if fs_mode:
         prompt += FS_PROBLEM_GUIDE
     prompt += CHART_NOTE
+    prompt += WRITING_STYLE_NOTE
     prompt += document_toolchain_note
     prompt += render_client_mcp_tools_section(mcp_tool_names, mcp_tool_specs)
     return prompt

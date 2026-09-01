@@ -263,6 +263,10 @@ def _ocr_page(path, page_no, outdir):
     base = _ocr_base()
     if not base:
         return None
+    if not _reader_endpoint_allowed(base + "/ocr"):
+        _trace({"stage": "ocr", "page": page_no, "status": "blocked",
+                "error": "OCR endpoint rejected by network policy"})
+        return None
     import urllib.error
     import urllib.request
     src = _one_page_pdf(path, page_no, outdir) or path

@@ -9,6 +9,11 @@ import httpx
 
 from frontier_agent.core.tool import tool
 from frontier_agent.infra.config import FrontierAgentConfig, get_config
+from frontier_agent.infra.network_policy import (
+    NetworkPolicyError,
+    intranet_only,
+    validate_outbound_url,
+)
 from frontier_agent.infra.summary_llm import summarize as _summary_llm_summarize
 from frontier_agent.infra.usage_meter import record_api_request
 from plugins.tools._academic_fetch import (
@@ -140,6 +145,17 @@ async def _fetch_one(url: str, info_to_extract: str) -> str:
     url = url.strip()
     if not url.startswith(("http://", "https://")):
         url = f"https://{url}"
+
+    if intranet_only():
+        return (
+            "[BLOCKED] web_fetch is disabled in intranet-only mode. The "
+            "configured internal search endpoint is the only network-backed "
+            "retrieval path."
+        )
+    try:
+        validate_outbound_url(url, purpose="fetch")
+    except NetworkPolicyError as exc:
+        return f"[BLOCKED] {exc}"
 
     # Vet the target before ANYTHING leaves the process — including the scrape
     # provider's request, which would otherwise be handed an internal URL.
@@ -442,6 +458,11 @@ async def _jina_request(
     engine with 403/422. Uses a longer ``X-Timeout`` so dynamic content has
     time to load.
     """
+    try:
+        validate_outbound_url(base_url, purpose="reader")
+    except NetworkPolicyError as exc:
+        logger.warning("Reader endpoint blocked by network policy: %s", exc)
+        return -1, str(exc)
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",

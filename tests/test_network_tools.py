@@ -18,6 +18,10 @@ def test_raw_web_search_remains_available_to_resource_manager() -> None:
 
 @pytest.mark.asyncio
 async def test_download_file_executes_bundled_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    # This test exercises the tool's public-mode mechanics. Intranet mode
+    # (the default) blocks download_file before any sandbox runner is
+    # involved; that behavior is asserted separately below.
+    monkeypatch.setenv("FRONTIER_AGENT_INTRANET_ONLY", "0")
     captured: dict[str, object] = {}
     sandbox = object()
 
@@ -57,6 +61,21 @@ _NON_PUBLIC_URLS = [
     "http://[::1]/",
     "http://user:pw@127.0.0.1/",
 ]
+
+
+@pytest.mark.asyncio
+async def test_download_file_blocked_by_default_intranet_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Intranet-only is the fail-closed default: the download path is refused
+    before any URL handling or sandbox runner can run."""
+    monkeypatch.delenv("FRONTIER_AGENT_INTRANET_ONLY", raising=False)
+    result = json.loads(
+        await download_module.download_file.ainvoke(
+            {"url": "https://example.com/sample.txt", "path": "sample.txt"}
+        )
+    )
+    assert result["status"] == "blocked"
 
 
 @pytest.mark.parametrize("url", _NON_PUBLIC_URLS)

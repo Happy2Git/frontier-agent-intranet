@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from workflows._shared.writing_style import WRITING_STYLE_NOTE
+
 # The reference agent's main system prompt AS IT APPEARS IN THE TRAINING DATA,
 # not as it appears in the reference source. Two byte-level deltas from that
 # source are intentional and load-bearing — the model saw this exact form:
@@ -64,10 +66,16 @@ def get_react_system_prompt(*, fs_mode: bool = False) -> str:
     distribution). ``fs_mode`` optionally appends the FrontierScience
     problem-solving guide (off by default; not needed for
     officeqa/gdpval/onemillion).
+
+    ``_REACT_BASE`` stays byte-identical to the reference; the writing-style
+    note is appended at assembly time alongside the search-language note (same
+    reason as the agent_team append: no SkillInjectionMiddleware in this
+    workflow, and the main agent's own final answer is the prose deliverable).
     """
     prompt = _REACT_BASE + _SEARCH_QUERY_LANGUAGE_NOTE
     if fs_mode:
         prompt += _FS_PROBLEM_GUIDE
+    prompt += WRITING_STYLE_NOTE
     return prompt
 
 
@@ -91,7 +99,7 @@ def get_direct_system_prompt() -> str:
     by profiles with ``agent.direct: true`` (no tools bound → the first
     tool-free reply is the final answer).
     """
-    return _DIRECT_BASE
+    return _DIRECT_BASE + WRITING_STYLE_NOTE
 
 
 def get_summarize_prompt(task_description: str) -> str:
@@ -115,7 +123,7 @@ def get_summarize_prompt(task_description: str) -> str:
         "You must absolutely not perform any MCP tool call, tool invocation, search, scrape, code execution, or similar actions.\n"
         "You can only answer the original question based on the information already retrieved and your own internal knowledge.\n"
         "If you attempt to call any tool, it will be considered a mistake."
-    )
+    ) + WRITING_STYLE_NOTE
 
 
 def get_report_prompt(task_description: str, language: str = "English") -> str:
@@ -161,7 +169,7 @@ No further tool calls are allowed.
 - **Brand/Publication Names**: Keep English names in their original form — write "Reuters" not "路透社", "Bloomberg" not "彭博社". This applies to all brand names, publication names, and institution names that are originally in English.
 - Do NOT mention tools, tool calls, or internal reasoning steps.
 - Focus solely on delivering a professional, easy-to-read response that answers the user's original question.
-
+{WRITING_STYLE_NOTE}
 ## Original Question (for reference)
 {task_description}
 """

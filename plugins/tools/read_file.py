@@ -8,6 +8,11 @@ import os
 import shlex
 
 from frontier_agent.core.tool import tool
+from frontier_agent.infra.network_policy import (
+    NetworkPolicyError,
+    intranet_only,
+    validate_outbound_url,
+)
 from plugins.tools._deliverable_policy import spill_write_error
 from plugins.tools._doc_reader import reader_src
 from plugins.tools._sandbox import (
@@ -19,6 +24,36 @@ from plugins.tools._sandbox import (
 )
 
 logger = logging.getLogger(__name__)
+
+_READDOC_REMOTE_ENV = "FRONTIER_AGENT_ALLOW_READDOC_REMOTE"
+
+
+def _truthy_env(name: str) -> bool:
+    return (os.environ.get(name, "").strip().lower()
+            in {"1", "true", "yes", "on", "enabled"})
+
+
+def _reader_network_allowed() -> tuple[bool, str | None]:
+    """Return whether the bundled parser may call OCR/Vision.
+
+    The parser is normally offline. Public-network mode keeps the historical
+    opt-in reader services; intranet mode requires a second explicit opt-in
+    and validates every configured endpoint before credentials enter the child
+    environment.
+    """
+    if not intranet_only():
+        return True, None
+    if not _truthy_env(_READDOC_REMOTE_ENV):
+        return False, None
+    for name in ("READDOC_VISION_URL", "READDOC_OCR_URL"):
+        endpoint = (os.environ.get(name) or "").strip()
+        if not endpoint:
+            continue
+        try:
+            validate_outbound_url(endpoint, purpose=name)
+        except NetworkPolicyError as exc:
+            return False, str(exc)
+    return True, None
 
 
 def _rejected_save_to(save_to: str) -> str | None:
@@ -262,13 +297,20 @@ async def read_file(
             q = shlex.quote(save_to)
             d = shlex.quote(os.path.dirname(save_to) or ".")
             cmd = f"mkdir -p {d} && {cmd} > {q} && wc -c < {q}"
-        # The parser is trusted harness infrastructure: allow_net opens networking so it can
-        # reach READDOC_OCR/VISION, and
-        # env_allow passes through those two services' URL/KEY. Sandbox env is deny-all by
-        # default (see _sandbox_env),
-        # so READDOC_* has to be declared here explicitly; the model's bash in the same sandbox does not inherit these credentials.
-        result = await arun_sandbox_cmd(sandbox, cmd, timeout=_TIMEOUT, input=_READER_SRC,
-                                        allow_net=True, env_allow=("READDOC_",))
+        # The bundled parser is offline by default. Remote OCR/Vision is an
+        # explicit operator opt-in in intranet mode, and its endpoints were
+        # checked above before URL/key variables enter the child environment.
+        reader_net, reader_error = _reader_network_allowed()
+        if reader_error:
+            return f"[read_file blocked] {reader_error}"
+        result = await arun_sandbox_cmd(
+            sandbox,
+            cmd,
+            timeout=_TIMEOUT,
+            input=_READER_SRC,
+            allow_net=reader_net,
+            env_allow=("READDOC_",) if reader_net else (),
+        )
         if result.exit_code != 0:
             return f"[read_file error] exit={result.exit_code}: {result.stderr or result.stdout}"
         if save_to:
